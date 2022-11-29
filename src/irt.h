@@ -50,7 +50,11 @@ typedef struct {
 	unsigned long		last_boiler_poll;			// last time
 	uint8_t				cur_flowtemp;				// last reported flow temp in Celsius
 	unsigned long		last_flow_update;			// last time the flow temp was reported
+	uint8_t				cur_rettemp;				// last reported return temp in Celsius
+	unsigned long		last_ret_update;			// last time the retrun temp was reported
 	struct PID_DATA	flowPidData;				// PID calculation for flow temp.
+	uint32_t    		burner_runtime;			    // burner runtime in minutes since last power on
+    uint8_t				last_runtime;               // last runtime read from boiler
 } _IRT_Sys_Status;
 
 #define IRT_MAX_SUB_MSGS 5 // max 5 messages in a single go
@@ -83,6 +87,7 @@ extern void irt_dumpBuffer(const char * prefix, uint8_t * telegram, uint8_t leng
 extern void irt_parseTelegram(uint8_t * telegram, uint8_t len);
 
 void irt_setFlowTemp(uint8_t temperature);
+void irt_setBurnerPower(uint8_t power);
 void irt_setWarmWaterActivated(bool activated);
 char *irt_format_flowtemp_pid_text(char *buf, size_t buf_len);
 void irt_setFlowPID(float flow_p, float flow_i, float flow_d);
@@ -96,12 +101,13 @@ void irt_start();
 void irt_loop();
 void irt_sendRawTelegram(char * telegram);
 void irt_set_water_temp(uint8_t wc, const char *setting, const char *value);
+void irt_doFlowTempTicker();
 
 /* ----- ems stuff to make the compiler happy ---- */
 // EMS bus IDs
 #define EMS_BUSID_DEFAULT 0x0B // Default 0x0B (Service Key)
 
-#define EMS_TXMODE_DEFAULT 1 // Default (was previously known as tx_mode 2 in v1.8.x)
+#define EMS_TXMODE_DEFAULT 4 // Default (was previously known as tx_mode 2 in v1.8.x)
 // default values for null values
 #define EMS_VALUE_BOOL_ON 0x01         // boolean true
 #define EMS_VALUE_BOOL_ON2 0xFF        // boolean true, EMS sometimes uses 0xFF for TRUE
@@ -217,7 +223,7 @@ typedef struct {
     uint8_t brand; // 0=unknown, 1=bosch, 2=junkers, 3=buderus, 4=nefit, 5=sieger, 11=worcester
 
     // UBAParameterWW
-    uint8_t wWActivated;     // Warm Water activated
+    uint8_t wWActivated;      // Warm Water activated
     uint16_t wWSelTemp;       // Warm Water selected temperature
 //    uint8_t wWCircPump;      // Warm Water circulation pump Available
 //    uint8_t wWDesinfectTemp; // Warm Water desinfection temperature
@@ -236,7 +242,7 @@ typedef struct {
     uint8_t  wWHeat;             // 3-way valve on WW
 //    uint8_t  wWCirc;             // Circulation on/off
     uint8_t  selBurnPow;         // Burner max power
-//    uint8_t  curBurnPow;         // Burner current power
+    uint8_t  curBurnPow;         // Burner current power
 //    uint16_t flameCurr;          // Flame current in micro amps
 //    uint8_t  sysPress;           // System pressure
     char     serviceCodeChar[3]; // 2 character status/service code
@@ -247,8 +253,8 @@ typedef struct {
 //    uint16_t boilTemp;    // Boiler temperature
 //    uint16_t exhaustTemp; // Exhaust temperature
 //    uint8_t  pumpMod;     // Pump modulation
-//    uint32_t burnStarts;  // # burner starts
-//    uint32_t burnWorkMin; // Total burner operating time
+    uint8_t burnStarts;  // # burner starts
+    uint32_t burnWorkMin; // Total burner operating time
 //    uint32_t heatWorkMin; // Total heat operating time
 //    uint16_t switchTemp;  // Switch temperature
 
@@ -263,14 +269,26 @@ typedef struct {
 //    uint32_t UBAuptime; // Total UBA working hours
 
     // UBAParametersMessage
+    uint8_t heatingActivated; // Heating activated on the boiler
     uint8_t heating_temp; // Heating temperature setting on the boiler
+    uint8_t burnMaxPower; // max power setting on the boiler
+//    uint8_t burnMinPower; // min power setting
+//    uint8_t boilHystOff; // offset to switch burner off
+//    uint8_t boilHystOn; // offset to switch burner on
+//    uint8_t burnMinPeriod; // minimum burn time
+    //has_update(telegram, pumpType_, 7); // 0=off, 02=?
+//    uint8_t pumpDelay; // Heat pump switch off delay after burner off
 //    uint8_t pump_mod_max; // Boiler circuit pump modulation max. power
 //    uint8_t pump_mod_min; // Boiler circuit pump modulation min. power
 
     // calculated values
     uint8_t tapwaterActive; // Hot tap water is on/off
     uint8_t heatingActive;  // Central heating is on/off
+    uint8_t boilerBlocked;  // boiler blocked for some time before next run
 
+   int16_t pidPerror;  // PID errors P
+   int16_t pidIerror;  // PID errors I
+   int16_t pidDerror;  // PID errors D
 } _EMS_Boiler;
 // Thermostat data
 typedef struct {
@@ -305,6 +323,8 @@ typedef struct {
 	uint16_t	flowtemp_P;		// P value of PID for flow temp control
 	uint16_t	flowtemp_I;		// I value of PID for flow temp control
 	uint16_t	flowtemp_D;		// D value of PID for flow temp control
+    uint16_t  restart_delay;    // time untill the next burner start. Will by used by PID
+    uint32_t  runtime_offset;   // offset of the runtime 
 
 	uint8_t	max_flowtemp;		// safety value, system will always limit to this max temp
 
@@ -315,7 +335,7 @@ typedef struct {
 typedef struct {
 //    _EMS_RX_STATUS   emsRxStatus;
 //    _EMS_TX_STATUS   emsTxStatus;
-    uint16_t         emsRxPgks;           // # successfull received
+    uint16_t         emsRxPkgs;           // # successfull received
     uint16_t         emsTxPkgs;           // # successfull sent
     uint16_t         emxCrcErr;           // CRC errors
     bool             emsPollEnabled;      // flag enable the response to poll messages

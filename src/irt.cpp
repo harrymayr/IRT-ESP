@@ -33,12 +33,22 @@ _EMS_Sys_Status EMS_Sys_Status; // EMS Status
 CircularBuffer<_IRT_TxTelegram, IRT_TX_TELEGRAM_QUEUE_MAX> IRT_TxQueue; // FIFO queue for Tx send buffer
 
 Ticker updateFlowTempTimer;
+Ticker restartDelayTimer;
 
 char * _hextoa(uint8_t value, char * buffer);
 char * _smallitoa(uint8_t value, char * buffer);
 char * _smallitoa3(uint16_t value, char * buffer);
 
 #define CHECK_DEB if (EMS_Sys_Status.emsLogging != EMS_SYS_LOGGING_NONE)
+
+// calls publishValues fron the Ticker loop, also sending sensor data
+// but not using false for force so only data that has changed will be sent
+void do_enableBurner() {
+    EMS_Boiler.boilerBlocked = 0;
+	myDebug("End restart-timer");
+	irt_doFlowTempTicker();
+}
+
 
 /**
  * dump a UART Tx or Rx buffer to console...
@@ -424,6 +434,19 @@ uint8_t irt_handle_0x82(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 
 uint8_t irt_handle_0x83(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 {
+    /* 83 C3 79 E1 00
+	 * 83 C3 79 E1 ss
+	 * ss - 0xA0 - if burner off
+	 * ss - 0x00 - 0xFF burner power: ss * 0.25 + 37 */
+    if ((length != 5) | ((data[4] == 0xA0) & (EMS_Boiler.heatingActive == 0)))
+  	    EMS_Boiler.curBurnPow = 0;
+    else {
+		EMS_Boiler.curBurnPow = ((data[4] / 4) + 37);
+	} 
+	return 0;
+}
+uint8_t irt_handle_0x84(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
+{
 
 	return 0;
 }
@@ -581,6 +604,8 @@ uint8_t irt_handle_0xA6(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 	/* A6 ?? ?? cc ww */
 	EMS_Boiler.retTemp = (irt_convert_raw_temp_to_real(data[4]) * 10);
 	ems_Device_add_flags(EMS_DEVICE_UPDATE_FLAG_BOILER);
+	IRT_Sys_Status.cur_rettemp = irt_convert_raw_temp_to_real(data[4]);
+	IRT_Sys_Status.last_ret_update = millis();
 	return 0;
 }
 
@@ -594,6 +619,32 @@ uint8_t irt_handle_0xA8(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 		EMS_Boiler.wWCurTmp = (irt_convert_raw_temp_to_real(data[4]) * 10);
 		ems_Device_add_flags(EMS_DEVICE_UPDATE_FLAG_BOILER);
 	}
+	return 0;
+}
+
+uint8_t irt_handle_0xAA(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
+{
+	// burner runtime
+	/* AA A5 F0 12 11 */
+	/* AA ?? ?? 12 c */
+	if (data[4] > IRT_Sys_Status.last_runtime) {
+		IRT_Sys_Status.burner_runtime += 255;
+		EMSESP_Settings.runtime_offset = IRT_Sys_Status.burner_runtime;
+		//myESP.saveSettings();  // for now, does not work as expected, create factory-settings :-(
+	}
+	IRT_Sys_Status.last_runtime = data[4];
+	EMS_Boiler.burnWorkMin = IRT_Sys_Status.burner_runtime +(255-data[4]);
+	ems_Device_add_flags(EMS_DEVICE_UPDATE_FLAG_BOILER);
+	return 0;
+}
+
+uint8_t irt_handle_0xAB(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
+{
+	// number of burner starts
+	/* AB A5 F0 13 45 */
+	/* AB ?? ?? 13 ss */
+	EMS_Boiler.burnStarts = data[4];
+	ems_Device_add_flags(EMS_DEVICE_UPDATE_FLAG_BOILER);
 	return 0;
 }
 
@@ -616,6 +667,17 @@ uint8_t irt_handle_0xC9(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 {
 	/* diff temp between in and out ??/ */
 /* last bytes is 0x00, 1 2 3 4 5 (burner status ??)*/
+	return 0;
+}
+
+uint8_t irt_handle_0xDE(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
+{
+	/* burnMaxPower in UBAParameters of EMS-Bus? */
+    /* The max-power in percent = burnMaxPower / 2.55 (0xFF = 100%)*/
+	/* DE A5 F0 XX C6 */
+	/* DE ?? ?? cc ss */
+	EMS_Boiler.burnMaxPower = (int) (data[4]*100/255);
+	ems_Device_add_flags(EMS_DEVICE_UPDATE_FLAG_BOILER);
 	return 0;
 }
 
@@ -694,7 +756,7 @@ uint8_t irt_handleMsg(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 		return 11;
 	}
 
-	EMS_Sys_Status.emsRxPgks++;
+	EMS_Sys_Status.emsRxPkgs++;
 
 	irt_update_status(msg, data, length);
 
@@ -722,6 +784,9 @@ uint8_t irt_handleMsg(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 	case 0x83:
 		return irt_handle_0x83(msg, data, length);
 		break;
+	case 0x84:
+		return irt_handle_0x84(msg, data, length);
+		break;
 	case 0x85:
 		return irt_handle_0x85(msg, data, length);
 		break;
@@ -746,11 +811,20 @@ uint8_t irt_handleMsg(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 	case 0xA8:
 		return irt_handle_0xA8(msg, data, length);
 		break;
+	case 0xAA:
+		return irt_handle_0xAA(msg, data, length);
+		break;
+	case 0xAB:
+		return irt_handle_0xAB(msg, data, length);
+		break;
 	case 0xAC:
 		return irt_handle_0xAC(msg, data, length);
 		break;
 	case 0xC9:
 		return irt_handle_0xC9(msg, data, length);
+		break;
+	case 0xDE:
+		return irt_handle_0xDE(msg, data, length);
 		break;
 	case 0xF0:
 		return irt_handle_0xF0(msg, data, length);
@@ -990,6 +1064,9 @@ void irt_check_send_queue()
 	if ((status & 0xFF00) == 0x0200) {
 		myDebug("Failed transmitting telegram, status2 %d", (status & 0xFF));
 	}
+	else
+	  EMS_Sys_Status.emsTxPkgs++;
+
 
 }
 
@@ -1055,17 +1132,25 @@ void irt_send_next_poll_to_boiler()
 	// prepare the next batch of status poll messages
 	switch (IRT_Sys_Status.poll_step) {
 	case 1:
-	case 3:
 	case 5:
-	case 7:
 	case 9:
-	case 11:
 		irt_init_telegram(&IRT_Tx, IRT_Sys_Status.my_address);
-		irt_add_sub_msg(&IRT_Tx, 0x90, 0, 0, 0);
-		irt_add_sub_msg(&IRT_Tx, 0x82, 0, 0, 0);
+		irt_add_sub_msg(&IRT_Tx, 0x07, IRT_Sys_Status.cur_set_burner_power, 0xD0, 2); // set burner power
+		irt_add_sub_msg(&IRT_Tx, 0x83, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0xA3, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0xA4, 0, 0, 0);
-		irt_add_sub_msg(&IRT_Tx, 0x8A, 0, 0, 0);
+		irt_add_sub_msg(&IRT_Tx, 0xA6, 0, 0, 0);
+		IRT_TxQueue.push(IRT_Tx);
+	    break;
+	case 3:
+	case 7:
+	case 11:
+		irt_init_telegram(&IRT_Tx, IRT_Sys_Status.my_address);
+		irt_add_sub_msg(&IRT_Tx, 0x07, IRT_Sys_Status.cur_set_burner_power, 0xD0, 2); // set burner power
+		irt_add_sub_msg(&IRT_Tx, 0x82, 0, 0, 0);
+		irt_add_sub_msg(&IRT_Tx, 0x83, 0, 0, 0);
+		irt_add_sub_msg(&IRT_Tx, 0xA4, 0, 0, 0);
+		irt_add_sub_msg(&IRT_Tx, 0xA6, 0, 0, 0);
 		IRT_TxQueue.push(IRT_Tx);
 		break;
 	case 2:
@@ -1074,7 +1159,7 @@ void irt_send_next_poll_to_boiler()
 		irt_add_sub_msg(&IRT_Tx, 0x81, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0x86, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0x85, 0, 0, 0);
-		irt_add_sub_msg(&IRT_Tx, 0x83, 0, 0, 0);
+		irt_add_sub_msg(&IRT_Tx, 0xDE, 0, 0, 0);
 		IRT_TxQueue.push(IRT_Tx);
 		break;
 	case 4:
@@ -1082,15 +1167,21 @@ void irt_send_next_poll_to_boiler()
 		irt_add_sub_msg(&IRT_Tx, 0x90, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0x73, 0x52, 0x25, 2);
 		irt_add_sub_msg(&IRT_Tx, 0x78, 0x01, 0xFF, 2);
+		irt_add_sub_msg(&IRT_Tx, 0x8A, 0, 0, 0);
 
 		// if we are at the minimum burn power, use the temp. limit of the boiler
 		// this keel keep the pump running, but switches off the burner
-		if ((IRT_Sys_Status.cur_set_burner_power > 0) &&
-				(IRT_Sys_Status.cur_set_burner_power <= IRT_MIN_USABLE_BURN_POWER) &&
-				(IRT_Sys_Status.req_water_temp >= IRT_MIN_FLOWTEMP)) {
-			irt_add_sub_msg(&IRT_Tx, 0x01, irt_convert_real_temp_to_raw(IRT_Sys_Status.req_water_temp), 0xF6, 2); // set max cv water temp
-		} else {
-			irt_add_sub_msg(&IRT_Tx, 0x01, irt_convert_real_temp_to_raw(EMSESP_Settings.max_flowtemp), 0xF6, 2); // set max cv water temp
+		if (EMS_Boiler.boilerBlocked == 0) {
+			if ((IRT_Sys_Status.cur_set_burner_power > 0) &&
+					(IRT_Sys_Status.cur_set_burner_power <= IRT_MIN_USABLE_BURN_POWER) &&
+					(IRT_Sys_Status.req_water_temp >= IRT_MIN_FLOWTEMP)) {
+			    EMS_Boiler.boilerBlocked = 1;
+				restartDelayTimer.once(EMSESP_Settings.restart_delay,do_enableBurner);
+				myDebug("Start restart-timer");
+				irt_add_sub_msg(&IRT_Tx, 0x01, irt_convert_real_temp_to_raw(max(IRT_MIN_FLOWTEMP,IRT_Sys_Status.req_water_temp-10)), 0xF6, 2); // set max cv water temp
+			} else {
+				irt_add_sub_msg(&IRT_Tx, 0x01, irt_convert_real_temp_to_raw(EMSESP_Settings.max_flowtemp), 0xF6, 2); // set max cv water temp
+			}
 		}
 		IRT_TxQueue.push(IRT_Tx);
 		break;
@@ -1099,7 +1190,6 @@ void irt_send_next_poll_to_boiler()
 		irt_add_sub_msg(&IRT_Tx, 0x90, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0x73, 0x52, 0x25, 2);
 		irt_add_sub_msg(&IRT_Tx, 0x78, 0x07, 0xFF, 2);
-		irt_add_sub_msg(&IRT_Tx, 0x07, IRT_Sys_Status.cur_set_burner_power, 0xD0, 2); // set burner power
 		IRT_TxQueue.push(IRT_Tx);
 		break;
 	case 8:
@@ -1107,7 +1197,7 @@ void irt_send_next_poll_to_boiler()
 		irt_add_sub_msg(&IRT_Tx, 0x90, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0x73, 0x52, 0x25, 2);
 		irt_add_sub_msg(&IRT_Tx, 0x78, 0x04, 0x00, 2);
-		irt_add_sub_msg(&IRT_Tx, 0x04, 0x00, 0x4D, 2);
+		irt_add_sub_msg(&IRT_Tx, 0x04, 0x08, 0x4D, 2);
 		IRT_TxQueue.push(IRT_Tx);
 		break;
 	case 10:
@@ -1115,6 +1205,7 @@ void irt_send_next_poll_to_boiler()
 		irt_add_sub_msg(&IRT_Tx, 0x90, 0, 0, 0);
 		irt_add_sub_msg(&IRT_Tx, 0x73, 0x52, 0x25, 2);
 		irt_add_sub_msg(&IRT_Tx, 0x78, 0x05, 0x04, 2);
+		irt_add_sub_msg(&IRT_Tx, 0xF0, 0x01, 0x21, 2);
 		if (IRT_Sys_Status.warm_water_mode) {
 			irt_add_sub_msg(&IRT_Tx, 0x05, 0x04, 0xE2, 2);
 		} else {
@@ -1173,7 +1264,9 @@ void irt_loop()
 void irt_setup_flowtemp_pid()
 {
 //	myDebug_P(PSTR("Setup PID: %d %d %d"), EMSESP_Settings.flowtemp_P, EMSESP_Settings.flowtemp_I, EMSESP_Settings.flowtemp_D);
-	pid_Init((EMSESP_Settings.flowtemp_P * SCALING_FACTOR) / 100,
+// for calculated error = 1 @ 6°C deviation of requested flowtemp, the P-value must at least SCALING_FACTOR/6
+// the error will be added on IRT_MIN_USABLE_BURN_POWER+1 to avoid immediately shut off of the burner while keeping the pump running. 
+	pid_Init(max(SCALING_FACTOR/6,(EMSESP_Settings.flowtemp_P * SCALING_FACTOR) / 100),
 				(EMSESP_Settings.flowtemp_I * SCALING_FACTOR) / 100,
 				(EMSESP_Settings.flowtemp_D * SCALING_FACTOR) / 100,
 				 &IRT_Sys_Status.flowPidData);
@@ -1232,31 +1325,50 @@ void irt_doFlowTempTicker()
 
 	// make sure the current reported flow temp is valid
 	if ((now_millis - IRT_Sys_Status.last_flow_update) >= IRT_BOILER_POLL_TIMEOUT) {
+	    myDebug_P(PSTR("Resetting boiler flow temp. because of boiler read timeout (%d) for flow temp."),(now_millis - IRT_Sys_Status.last_flow_update));
 		IRT_Sys_Status.cur_set_burner_power = 0;
 		return;
 	}
 
+    // make sure the current reported ret temp is valid
+	if ((now_millis - IRT_Sys_Status.last_ret_update) >= IRT_BOILER_POLL_TIMEOUT) {
+	    myDebug_P(PSTR("Resetting boiler flow temp. because of boiler read timeout (%d) for return temp."),(now_millis - IRT_Sys_Status.last_ret_update));
+		IRT_Sys_Status.cur_set_burner_power = 0;
+		return;
+	}
 	int16_t err, new_power;
 
 
-	new_power = IRT_Sys_Status.cur_set_burner_power;
+//	new_power = IRT_Sys_Status.cur_set_burner_power;
+// +1 to avoid immediately shut off of the burner while keeping the pump running.
+    new_power = IRT_MIN_USABLE_BURN_POWER + 1;
 
-	err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_flowtemp, &IRT_Sys_Status.flowPidData);
+//	err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_flowtemp, &IRT_Sys_Status.flowPidData);
+	err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_rettemp, &IRT_Sys_Status.flowPidData);
 
 	if (IRT_Sys_Status.cur_set_burner_power == 0) {
 		// Pick a starting point based on requested temp and cur. floww temp
 		//new_power = 60 + (IRT_Sys_Status.req_water_temp << 1);
-		new_power = calculate_start_power(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_flowtemp);
+		new_power = calculate_start_power(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_rettemp);
 		irt_setup_flowtemp_pid();
 	} else {
-		new_power = new_power + err;
+		if (EMS_Boiler.boilerBlocked==0)
+		  	new_power = new_power + err;
+		else
+			pid_Reset_Integrator(&IRT_Sys_Status.flowPidData);
 	}
 	// limit power to valid range
-	if (new_power < IRT_MIN_USABLE_BURN_POWER) new_power = IRT_MIN_USABLE_BURN_POWER; // any lower and the boiler stops running
+	if (new_power < IRT_MIN_USABLE_BURN_POWER) {
+	  new_power = IRT_MIN_USABLE_BURN_POWER; // any lower and the boiler stops running
+	  pid_Reset_Integrator(&IRT_Sys_Status.flowPidData);
+	}
 	if (new_power > 0xF0) new_power = 0xF0; // max power
 
-	CHECK_DEB myDebug_P(PSTR("Req %d C Cur %d Err %d old pwr: %d new pwr: %d (0x%02x)"), IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_flowtemp, err, IRT_Sys_Status.cur_set_burner_power, new_power, new_power);
-
+	CHECK_DEB myDebug_P(PSTR("Req %d C Cur %d Err %d old pwr: %d new pwr: %d (0x%02x)"), IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_rettemp, err, IRT_Sys_Status.cur_set_burner_power, new_power, new_power);
+	CHECK_DEB myDebug_P(PSTR("P %d I %d D %d Err %d"), IRT_Sys_Status.flowPidData.P_Value, IRT_Sys_Status.flowPidData.I_Value, IRT_Sys_Status.flowPidData.D_Value, err);
+    EMS_Boiler.pidPerror = IRT_Sys_Status.flowPidData.P_Value;
+	EMS_Boiler.pidIerror = IRT_Sys_Status.flowPidData.I_Value;
+	EMS_Boiler.pidDerror = IRT_Sys_Status.flowPidData.D_Value;
 	IRT_Sys_Status.cur_set_burner_power = (uint8_t)new_power;
 
 }
@@ -1266,6 +1378,10 @@ void irt_doFlowTempTicker()
  */
 void irt_setFlowTemp(uint8_t temperature) {
 
+    if (!EMS_Boiler.heatingActivated ) {
+		myDebug_P(PSTR("Central heating is deactivated"));
+		return;
+	}
 	if (temperature > EMSESP_Settings.max_flowtemp) {
 		myDebug_P(PSTR("Maximum boiler flow temperature is %d C, ignoring set of %d C"), EMSESP_Settings.max_flowtemp, temperature);
 		return;
@@ -1284,6 +1400,31 @@ void irt_setFlowTemp(uint8_t temperature) {
 		IRT_Sys_Status.req_water_temp = 0;
 	}
 }
+
+/**
+ * Set the burner power
+ */
+void irt_setBurnerPower(uint8_t power) {
+
+    if (!EMS_Boiler.heatingActivated ) {
+		myDebug_P(PSTR("Central heating is deactivated"));
+		return;
+	}
+/* 	if (power > 100) {
+		myDebug_P(PSTR("Maximum boiler flow temperature is %d C, ignoring set of %d C"), EMSESP_Settings.max_flowtemp, temperature);
+		return;
+	}
+ */	EMS_Boiler.selBurnPow = power*2.55;
+
+	if (EMSESP_Settings.tx_mode == 5) {
+		CHECK_DEB myDebug_P(PSTR("Setting burner power to %d %"), power*2.55);
+		IRT_Sys_Status.cur_set_burner_power = power*2.55;
+	} else {
+		CHECK_DEB myDebug_P(PSTR("Cannot set burner power to %d , not in active mode"), power*2.55);
+		IRT_Sys_Status.cur_set_burner_power = 0;
+	}
+}
+
 /**
  * Activate / De-activate the Warm Water 0x33
  * true = on, false = off
@@ -1464,10 +1605,16 @@ void irt_init()
 
 	IRT_Sys_Status.cur_flowtemp = 20; // setup a default
 	IRT_Sys_Status.last_flow_update = 0;
+	IRT_Sys_Status.cur_rettemp = 20; // setup a default
+	IRT_Sys_Status.last_ret_update = 0;
 	IRT_Sys_Status.cur_set_burner_power = 0;
 
 	irt_setup_flowtemp_pid();
-	updateFlowTempTimer.attach(60, irt_doFlowTempTicker); // update requested flow temp
+	updateFlowTempTimer.attach(10, irt_doFlowTempTicker); // update requested flow temp
+	IRT_Sys_Status.burner_runtime = EMSESP_Settings.runtime_offset;
+	IRT_Sys_Status.last_runtime = 255;
+	EMS_Boiler.boilerBlocked = 0;
+	EMS_Boiler.heatingActivated = 1;
 }
 
 void irt_setup()

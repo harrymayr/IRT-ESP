@@ -35,10 +35,13 @@ typedef struct PID_DATA{
   int32_t sumError;
   //! The Proportional tuning constant, multiplied with SCALING_FACTOR
   int16_t P_Factor;
+  int16_t P_Value;
   //! The Integral tuning constant, multiplied with SCALING_FACTOR
   int16_t I_Factor;
+  int16_t I_Value;
   //! The Derivative tuning constant, multiplied with SCALING_FACTOR
   int16_t D_Factor;
+  int16_t D_Value;
   //! Maximum allowed error, avoid overflow
   int16_t maxError;
   //! Maximum allowed sumerror, avoid overflow

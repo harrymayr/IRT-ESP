@@ -374,6 +374,9 @@ function listStats() {
     document.getElementById("mac").innerHTML = ajaxobj.mac;
     document.getElementById("signalstr").innerHTML = ajaxobj.signalstr + " %";
     document.getElementById("systemload").innerHTML = ajaxobj.systemload + " %";
+    document.getElementById("crcerr").innerHTML = ajaxobj.crcerr;
+    document.getElementById("rxpkgs").innerHTML = ajaxobj.rxpkgs;
+    document.getElementById("txpkgs").innerHTML = ajaxobj.txpkgs;
 
     if (ajaxobj.mqttconnected) {
         document.getElementById("mqttconnected").innerHTML = "MQTT is connected";

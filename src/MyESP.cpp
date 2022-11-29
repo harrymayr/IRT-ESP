@@ -2209,9 +2209,14 @@ void MyESP::_fs_setup() {
         _fs_writeConfig();
     }
 
+    myDebug_P(PSTR("[FS] load system and custom config"));
     // load system and custom config
     if (!_fs_loadCustomConfig()) {
-        _fs_createCustomConfig();
+        myDebug_P(PSTR("[FS] try to create custom config"));
+        if (_fs_createCustomConfig())
+          myDebug_P(PSTR("[FS] custom config should be created"));
+        else
+          myDebug_P(PSTR("[FS] error creating custom config"));
     }
 
     if (_ota_post_callback_f) {
@@ -2677,7 +2682,9 @@ void MyESP::_sendStatus() {
     uint8_t  sec = rem % 60;
     sprintf(uptime, "%d day%s %d hour%s %d minute%s %d second%s", d, (d == 1) ? "" : "s", h, (h == 1) ? "" : "s", m, (m == 1) ? "" : "s", sec, (sec == 1) ? "" : "s");
     root["uptime"] = uptime;
-
+    root["crcerr"] = EMS_Sys_Status.emxCrcErr;
+    root["rxpkgs"] = EMS_Sys_Status.emsRxPkgs;
+    root["txpkgs"] = EMS_Sys_Status.emsTxPkgs;
     char   buffer[MYESP_JSON_MAXSIZE_MEDIUM];
     size_t len = serializeJson(root, buffer);
 

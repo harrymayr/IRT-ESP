@@ -42,6 +42,9 @@ void pid_Init(int16_t p_factor, int16_t i_factor, int16_t d_factor, struct PID_D
   pid->P_Factor = p_factor;
   pid->I_Factor = i_factor;
   pid->D_Factor = d_factor;
+  pid->P_Value = 0;
+  pid->I_Value = 0;
+  pid->D_Value = 0;
   // Limits to avoid overflow
   pid->maxError = MAX_INT / (pid->P_Factor + 1);
   pid->maxSumError = MAX_I_TERM / (pid->I_Factor + 1);
@@ -73,7 +76,7 @@ int16_t pid_Controller(int16_t setPoint, int16_t processValue, struct PID_DATA *
   else{
     p_term = pid_st->P_Factor * error;
   }
-
+  pid_st->P_Value = p_term;
   // Calculate Iterm and limit integral runaway
   temp = pid_st->sumError + error;
   if(temp > pid_st->maxSumError){
@@ -88,10 +91,14 @@ int16_t pid_Controller(int16_t setPoint, int16_t processValue, struct PID_DATA *
     pid_st->sumError = temp;
     i_term = pid_st->I_Factor * pid_st->sumError;
   }
-
+  pid_st->I_Value = i_term;
   // Calculate Dterm
-  d_term = pid_st->D_Factor * (pid_st->lastProcessValue - processValue);
-
+  if ((setPoint == 0) || (pid_st->lastProcessValue==0))
+    d_term = 0;
+  else
+    d_term = pid_st->D_Factor * (pid_st->lastProcessValue - processValue);
+  pid_st->D_Value = d_term;
+  
   pid_st->lastProcessValue = processValue;
 
   ret = (p_term + i_term + d_term) / SCALING_FACTOR;
@@ -101,7 +108,7 @@ int16_t pid_Controller(int16_t setPoint, int16_t processValue, struct PID_DATA *
   else if(ret < -MAX_INT){
     ret = -MAX_INT;
   }
-
+  
   return((int16_t)ret);
 }
 

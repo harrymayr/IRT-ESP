@@ -7,11 +7,11 @@
   "private": true,
   "license": "GPL-3.0",
   "devDependencies": {
-    "gulp": "^4.0.0",
-    "gulp-htmlmin": "^4.0.0",
-    "gulp-gzip": "^1.4.2",
+    "gulp": "^4.0.2",
     "gulp-concat": "^2.6.1",
     "gulp-flatmap": "^1.0.2",
+    "gulp-gzip": "^1.4.2",
+    "gulp-htmlmin": "^4.0.0",
     "gulp-uglify": "^3.0.2",
     "pump": "^3.0.0"
   }

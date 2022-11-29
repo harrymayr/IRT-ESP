@@ -8,16 +8,26 @@ var custom_config = {
         "listen_mode": false,
         "shower_timer": false,
         "shower_alert": false,
-        "publish_time": 10,
-        "tx_mode": 1
-    }
-};
+        "publish_time": 1,
+        "tx_mode": 4,
+        "restart_delay": 600,
+        "max_flowtemp": 60,
+        "flowtemp_p": 50,
+        "flowtemp_i": 10,
+        "flowtemp_d": 0,
+        "runtime_offset": 0
+       }
+    };
 
 function listcustom() {
 
     document.getElementById("led_gpio").value = custom_config.settings.led_gpio;
     document.getElementById("dallas_gpio").value = custom_config.settings.dallas_gpio;
     document.getElementById("publish_time").value = custom_config.settings.publish_time;
+    document.getElementById("restart_delay").value = custom_config.settings.restart_delay;
+    document.getElementById("flowtemp_p").value = custom_config.settings.flowtemp_p;
+    document.getElementById("flowtemp_i").value = custom_config.settings.flowtemp_i;
+    document.getElementById("flowtemp_d").value = custom_config.settings.flowtemp_d;
     document.getElementById("tx_mode").value = custom_config.settings.tx_mode;
 
     if (custom_config.settings.led) {
@@ -39,6 +49,7 @@ function listcustom() {
     if (custom_config.settings.shower_alert) {
         $("input[name=\"shower_alert\"][value=\"1\"]").prop("checked", true);
     }
+    document.getElementById("runtime_offset").value = custom_config.settings.runtime_offset;
 }
 
 function savecustom() {
@@ -71,7 +82,12 @@ function savecustom() {
     }
 
     custom_config.settings.publish_time = parseInt(document.getElementById("publish_time").value);
+    custom_config.settings.restart_delay = parseInt(document.getElementById("restart_delay").value);
+    custom_config.settings.flowtemp_p = parseInt(document.getElementById("flowtemp_p").value);
+    custom_config.settings.flowtemp_i = parseInt(document.getElementById("flowtemp_i").value);
+    custom_config.settings.flowtemp_d = parseInt(document.getElementById("flowtemp_d").value);
     custom_config.settings.tx_mode = parseInt(document.getElementById("tx_mode").value);
+    custom_config.settings.runtime_offset = parseInt(document.getElementById("runtime_offset").value);
 
     custom_saveconfig();
 }
@@ -89,7 +105,7 @@ function listCustomStats() {
         document.getElementById("hp_show").style.display = "none";
         return;
     }
-
+ 
     var list = document.getElementById("devices");
     var obj = ajaxobj.emsbus.devices;
 
@@ -125,6 +141,11 @@ function listCustomStats() {
         document.getElementById("b6").innerHTML = ajaxobj.boiler.b6 + " &#8451;";
         document.getElementById("b7").innerHTML = ajaxobj.boiler.b7 + " &#8451;";
         document.getElementById("b8").innerHTML = ajaxobj.boiler.b8 + " &#8451;";
+        document.getElementById("b9").innerHTML = ajaxobj.boiler.b9;
+        document.getElementById("b10").innerHTML = ajaxobj.boiler.b10;
+        document.getElementById("b11").innerHTML = ajaxobj.boiler.b11;
+        document.getElementById("b12").innerHTML = ajaxobj.boiler.b12 + " &#37;";
+        document.getElementById("b13").innerHTML = ajaxobj.boiler.b13;
     } else {
         document.getElementById("boiler_show").style.display = "none";
     }

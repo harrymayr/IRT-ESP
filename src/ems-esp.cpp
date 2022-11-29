@@ -43,6 +43,10 @@ Ticker publishValuesTimer;
 
 bool _need_first_publish = true; // this ensures on boot we always send out MQTT messages
 
+#define DEFAULT_RESTART_DELAY 600     // 10 minutes till the next burner start
+
+#define DEFAULT_RUNTIME_OFFSET 0     // no offset for the runtime
+
 #define SYSTEMCHECK_TIME 30 // every 30 seconds check if EMS can be reached
 Ticker systemCheckTimer;
 
@@ -84,8 +88,10 @@ static const command_t project_cmds[] PROGMEM = {
     {true, "shower_timer <on | off>", "send MQTT notification on all shower durations"},
     {true, "shower_alert <on | off>", "stop hot water to send 3 cold burst warnings after max shower time is exceeded"},
     {true, "publish_time <seconds>", "set frequency for publishing data to MQTT (-1=off, 0=automatic)"},
+    {true, "restart_delay <minutes>", "set time-delay for the next burner start"},
+    {true, "runtime_offset <minutes>", "set offset for the 1byte runtime-value of the boiler"},
     {true, "tx_mode <n>", "changes Tx logic. 1=ems generic, 2=ems+, 3=Junkers HT3, 4=iRT, 5=Active iRT"},
-    {true, "master_thermostat [product id]", "set default thermostat to use. No argument lists options"},
+//    {true, "master_thermostat [product id]", "set default thermostat to use. No argument lists options"},
     {true, "flowtemp_pid [p] [i] [d]", "Set PID values for flow temperature controller (0.0-9.9)"},
     {true, "max_flowtemp [temp]", "Set max. flow temperature (10-90)"},
 
@@ -107,6 +113,7 @@ static const command_t project_cmds[] PROGMEM = {
     {false, "boiler read <type ID>", "send read request to boiler"},
     {false, "boiler wwtemp <degrees>", "set boiler warm water temperature"},
     {false, "boiler wwactive <on | off>", "set boiler warm water on/off"},
+    {false, "boiler heatingactivated <on | off>", "set boiler central heating on/off"},
 //    {false, "boiler wwonetime <on | off>", "set boiler warm water onetime on/off"},
     {false, "boiler tapwater <on | off>", "set boiler warm tap water on/off"},
     {false, "boiler flowtemp <degrees>", "set boiler flow temperature"},
@@ -249,7 +256,9 @@ void showInfo() {
     if (ems_getBusConnected()) {
 //        myDebug_P(PSTR("  Bus is connected, protocol: %s"), ((EMS_Sys_Status.emsIDMask == 0x80) ? "Junkers HT3" : "Buderus"));
         myDebug_P(PSTR("  Bus is connected, protocol: iRT") );
-        myDebug_P(PSTR("  Rx: # successful read requests=%d, # CRC errors=%d"), EMS_Sys_Status.emsRxPgks, EMS_Sys_Status.emxCrcErr);
+        myDebug_P(PSTR("  Rx: # successful read requests=%d, # CRC errors=%d"), EMS_Sys_Status.emsRxPkgs, EMS_Sys_Status.emxCrcErr);
+        myDebug_P(PSTR("  Tx: # successful write requests=%d"), EMS_Sys_Status.emsTxPkgs);
+
 #ifdef nuniet
         if (ems_getTxCapable()) {
             char valuestr[8] = {0}; // for formatting floats
@@ -262,7 +271,7 @@ void showInfo() {
 #endif
     } else {
         myDebug_P(PSTR("  No connection can be made to the iRT bus"));
-        myDebug_P(PSTR("  Rx: # successful read requests=%d, # CRC errors=%d"), EMS_Sys_Status.emsRxPgks, EMS_Sys_Status.emxCrcErr);
+        myDebug_P(PSTR("  Rx: # successful read requests=%d, # CRC errors=%d"), EMS_Sys_Status.emsRxPkgs, EMS_Sys_Status.emxCrcErr);
     }
 
     myDebug_P(PSTR(""));
@@ -284,7 +293,8 @@ void showInfo() {
 
     // UBAParameterWW
     _renderBoolValue("Warm Water activated", EMS_Boiler.wWActivated);
-//    _renderBoolValue("Warm Water circulation pump available", EMS_Boiler.wWCircPump);
+    _renderBoolValue("Heating activated", EMS_Boiler.heatingActivated);
+///    _renderBoolValue("Warm Water circulation pump available", EMS_Boiler.wWCircPump);
 /*
     if (EMS_Boiler.wWComfort == EMS_VALUE_UBAParameterWW_wwComfort_Hot) {
         myDebug_P(PSTR("  Warm Water comfort setting: Hot"));
@@ -320,7 +330,7 @@ void showInfo() {
     _renderBoolValue("Ignition", EMS_Boiler.ignWork);
 //    _renderBoolValue("Circulation pump", EMS_Boiler.wWCirc);
     _renderIntValue("Burner selected max power", "%", EMS_Boiler.selBurnPow);
-//    _renderIntValue("Burner current power", "%", EMS_Boiler.curBurnPow);
+    _renderIntValue("Burner current power", "%", EMS_Boiler.curBurnPow);
 //    _renderShortValue("Flame current", "uA", EMS_Boiler.flameCurr);
 //    _renderIntValue("System pressure", "bar", EMS_Boiler.sysPress, 10);
     if (EMS_Boiler.serviceCode == EMS_VALUE_USHORT_NOTSET) {
@@ -344,13 +354,14 @@ void showInfo() {
 
 //        _renderUShortValue("Exhaust temperature", "C", EMS_Boiler.exhaustTemp);
 //    _renderIntValue("Pump modulation", "%", EMS_Boiler.pumpMod);
-//    _renderLongValue("Burner # starts", "times", EMS_Boiler.burnStarts);
-//    if (EMS_Boiler.burnWorkMin != EMS_VALUE_LONG_NOTSET) {
-//        myDebug_P(PSTR("  Total burner operating time: %d days %d hours %d minutes"),
-//                  EMS_Boiler.burnWorkMin / 1440,
-//                  (EMS_Boiler.burnWorkMin % 1440) / 60,
-//                  EMS_Boiler.burnWorkMin % 60);
-//    }
+    _renderIntValue("Burner # starts", "times", EMS_Boiler.burnStarts);
+    if (EMS_Boiler.burnWorkMin != EMS_VALUE_LONG_NOTSET) {
+        myDebug_P(PSTR("  Total burner operating time: %d days %d hours %d minutes"),
+                  EMS_Boiler.burnWorkMin / 1440,
+                  (EMS_Boiler.burnWorkMin % 1440) / 60,
+                  EMS_Boiler.burnWorkMin % 60);
+    }
+    _renderLongValue("Burner runtime", "minutes", EMS_Boiler.burnWorkMin);
 //    if (EMS_Boiler.heatWorkMin != EMS_VALUE_LONG_NOTSET) {
 //        myDebug_P(PSTR("  Total heat operating time: %d days %d hours %d minutes"),
 //                  EMS_Boiler.heatWorkMin / 1440,
@@ -625,9 +636,9 @@ void publishEMSValues_boiler() {
     if (EMS_Boiler.selBurnPow != EMS_VALUE_INT_NOTSET) {
         rootBoiler["selBurnPow"] = EMS_Boiler.selBurnPow;
     }
-//    if (EMS_Boiler.curBurnPow != EMS_VALUE_INT_NOTSET) {
-//        rootBoiler["curBurnPow"] = EMS_Boiler.curBurnPow;
-//    }
+    if (EMS_Boiler.curBurnPow != EMS_VALUE_INT_NOTSET) {
+        rootBoiler["curBurnPow"] = EMS_Boiler.curBurnPow;
+    }
 //    if (EMS_Boiler.pumpMod != EMS_VALUE_INT_NOTSET) {
 //        rootBoiler["pumpMod"] = EMS_Boiler.pumpMod;
 //    }
@@ -669,6 +680,9 @@ void publishEMSValues_boiler() {
 //    }
     if (EMS_Boiler.wWActivated != EMS_VALUE_BOOL_NOTSET) {
         rootBoiler["wWActivated"] = _bool_to_char(s, EMS_Boiler.wWActivated);
+    }
+    if (EMS_Boiler.heatingActivated != EMS_VALUE_BOOL_NOTSET) {
+        rootBoiler["heatingActivated"] = _bool_to_char(s, EMS_Boiler.heatingActivated);
     }
 //    if (EMS_Boiler.wWActivated != EMS_VALUE_BOOL_NOTSET) {
 //        rootBoiler["wWOnetime"] = _bool_to_char(s, EMS_Boiler.wWOneTime);
@@ -712,12 +726,12 @@ void publishEMSValues_boiler() {
 //    if (abs(EMS_Boiler.UBAuptime) != EMS_VALUE_LONG_NOTSET) {
 //        rootBoiler["UBAuptime"] = (float)EMS_Boiler.UBAuptime;
 //    }
-//    if (abs(EMS_Boiler.burnStarts) != EMS_VALUE_LONG_NOTSET) {
-//        rootBoiler["burnStarts"] = (float)EMS_Boiler.burnStarts;
-//    }
-//    if (abs(EMS_Boiler.burnWorkMin) != EMS_VALUE_LONG_NOTSET) {
-//        rootBoiler["burnWorkMin"] = (float)EMS_Boiler.burnWorkMin;
-//    }
+    if (EMS_Boiler.burnStarts != EMS_VALUE_INT_NOTSET) {
+        rootBoiler["burnStarts"] = EMS_Boiler.burnStarts;
+    }
+    if (EMS_Boiler.burnWorkMin != EMS_VALUE_LONG_NOTSET) {
+        rootBoiler["burnWorkMin"] = (float)EMS_Boiler.burnWorkMin;
+    }
 //    if (abs(EMS_Boiler.heatWorkMin) != EMS_VALUE_LONG_NOTSET) {
 //        rootBoiler["heatWorkMin"] = (float)EMS_Boiler.heatWorkMin;
 //    }
@@ -726,7 +740,11 @@ void publishEMSValues_boiler() {
         rootBoiler["ServiceCode"]       = EMS_Boiler.serviceCodeChar;
         rootBoiler["ServiceCodeNumber"] = EMS_Boiler.serviceCode;
     }
-
+   if (EMS_Boiler.pidPerror != EMS_VALUE_USHORT_NOTSET) {
+        rootBoiler["pidPerror"]  = (float)EMS_Boiler.pidPerror/SCALING_FACTOR;
+        rootBoiler["pidIerror"]  = (float)EMS_Boiler.pidIerror/SCALING_FACTOR;
+        rootBoiler["pidDerror"]  = (float)EMS_Boiler.pidDerror/SCALING_FACTOR;
+   }
     myDebugLog("Publishing boiler data via MQTT");
     myESP.mqttPublish(TOPIC_BOILER_DATA, doc);
 
@@ -1098,6 +1116,8 @@ bool LoadSaveCallback(MYESP_FSACTION_t action, JsonObject settings) {
         EMSESP_Settings.shower_timer    = settings["shower_timer"];
         EMSESP_Settings.shower_alert    = settings["shower_alert"];
         EMSESP_Settings.publish_time    = settings["publish_time"] | DEFAULT_PUBLISHTIME;
+        EMSESP_Settings.restart_delay   = settings["restart_delay"] | DEFAULT_RESTART_DELAY;
+        EMSESP_Settings.runtime_offset  = settings["runtime_offset"] | DEFAULT_RUNTIME_OFFSET;
 
         EMSESP_Settings.listen_mode = settings["listen_mode"];
         ems_setTxDisabled(EMSESP_Settings.listen_mode);
@@ -1132,14 +1152,16 @@ bool LoadSaveCallback(MYESP_FSACTION_t action, JsonObject settings) {
         settings["shower_timer"]      = EMSESP_Settings.shower_timer;
         settings["shower_alert"]      = EMSESP_Settings.shower_alert;
         settings["publish_time"]      = EMSESP_Settings.publish_time;
+        settings["restart_delay"]     = EMSESP_Settings.restart_delay;
+        settings["runtime_offset"]    = EMSESP_Settings.runtime_offset;
         settings["tx_mode"]           = EMSESP_Settings.tx_mode;
         settings["bus_id"]            = EMSESP_Settings.bus_id;
         settings["master_thermostat"] = EMSESP_Settings.master_thermostat;
         settings["known_devices"]     = EMSESP_Settings.known_devices;
-		 settings["flowtemp_p"]			= EMSESP_Settings.flowtemp_P;
-		 settings["flowtemp_i"]			= EMSESP_Settings.flowtemp_I;
-		 settings["flowtemp_d"]			= EMSESP_Settings.flowtemp_D;
-		 settings["max_flowtemp"]			= EMSESP_Settings.max_flowtemp;
+		settings["flowtemp_p"]		  = EMSESP_Settings.flowtemp_P;
+		settings["flowtemp_i"]		  = EMSESP_Settings.flowtemp_I;
+		settings["flowtemp_d"]		  = EMSESP_Settings.flowtemp_D;
+		settings["max_flowtemp"]	  = EMSESP_Settings.max_flowtemp;
 
         return true;
     }
@@ -1257,6 +1279,26 @@ MYESP_FSACTION_t SetListCallback(MYESP_FSACTION_t action, char **argv, size_t ar
             ok = MYESP_FSACTION_RESTART;
         }
 
+        // restart_delay
+        if (strcmp(setting, "restart_delay") == 0) {
+            if (wc == 1) {
+                EMSESP_Settings.restart_delay = 0;
+            } else {
+                EMSESP_Settings.restart_delay = atoi(value);
+            }
+            ok = MYESP_FSACTION_RESTART;
+        }
+
+        // runtime_offset
+        if (strcmp(setting, "runtime_offset") == 0) {
+            if (wc == 1) {
+                EMSESP_Settings.runtime_offset = 0;
+            } else {
+                EMSESP_Settings.runtime_offset = atol(value);
+            }
+            ok = MYESP_FSACTION_RESTART;
+        }
+ 
         // tx_mode
         if ((strcmp(setting, "tx_mode") == 0) && (wc == 2)) {
             uint8_t mode = atoi(value);
@@ -1347,7 +1389,9 @@ MYESP_FSACTION_t SetListCallback(MYESP_FSACTION_t action, char **argv, size_t ar
         } else {
             myDebug_P(PSTR("  publish_time=%d"), EMSESP_Settings.publish_time);
         }
-
+        myDebug_P(PSTR("  restart_delay=%d"), EMSESP_Settings.restart_delay);
+        myDebug_P(PSTR("  runtime_offset=%d"), EMSESP_Settings.runtime_offset);
+ 
         if (EMSESP_Settings.master_thermostat) {
             myDebug_P(PSTR("  master_thermostat=%d"), EMSESP_Settings.master_thermostat);
         } else {
@@ -1587,6 +1631,14 @@ void TelnetCommandCallback(char *commandLine, int argc, char **argv) {
                 irt_setWarmWaterActivated(false);
                 ok = true;
             }
+        } else if (strcmp(argv[1], "heatingactivated") == 0) {
+            if (strcmp(argv[2], "on") == 0) {
+                EMS_Boiler.heatingActivated = 1;
+                ok = true;
+            } else if (strcmp(argv[2], "off") == 0) {
+                EMS_Boiler.heatingActivated = 0;
+                ok = true;
+            }
 //        } else if (strcmp(argv[1], "wwonetime") == 0) {
 //            if (strcmp(argv[2], "on") == 0) {
 //                ems_setWarmWaterOnetime(true);
@@ -1696,6 +1748,7 @@ void MQTTCallback(unsigned int type, const char * topic, const char * message) {
 
         // these three need to be unique topics
         myESP.mqttSubscribe(TOPIC_BOILER_CMD_WWACTIVATED);
+        myESP.mqttSubscribe(TOPIC_BOILER_CMD_HEATINGACTIVATED);
 //        myESP.mqttSubscribe(TOPIC_BOILER_CMD_WWONETIME);
 //        myESP.mqttSubscribe(TOPIC_BOILER_CMD_WWCIRCULATION);
         myESP.mqttSubscribe(TOPIC_BOILER_CMD_WWTEMP);
@@ -1809,6 +1862,14 @@ void MQTTCallback(unsigned int type, const char * topic, const char * message) {
 //            }
             return;
         }
+        // boiler power setting
+        if (strcmp(command, TOPIC_BOILER_CMD_BURNER_POWER) == 0) {
+            uint8_t t = doc["data"];
+//            if (t) {
+                irt_setBurnerPower(t);
+//            }
+            return;
+        }
 
         return; // unknown boiler command
     }
@@ -1821,6 +1882,16 @@ void MQTTCallback(unsigned int type, const char * topic, const char * message) {
             irt_setWarmWaterActivated(true);
         } else if (message[0] == MYESP_MQTT_PAYLOAD_OFF || strcmp(message, "off") == 0) {
             irt_setWarmWaterActivated(false);
+        }
+        return;
+    }
+
+    // heatingActivated
+    if (strcmp(topic, TOPIC_BOILER_CMD_HEATINGACTIVATED) == 0) {
+        if ((message[0] == MYESP_MQTT_PAYLOAD_ON || strcmp(message, "on") == 0) || (strcmp(message, "auto") == 0)) {
+            EMS_Boiler.heatingActivated = 1;
+        } else if (message[0] == MYESP_MQTT_PAYLOAD_OFF || strcmp(message, "off") == 0) {
+            EMS_Boiler.heatingActivated = 0;
         }
         return;
     }
@@ -2086,6 +2157,15 @@ void WebCallback(JsonObject root) {
 #endif
         thermostat["ok"] = false;
 //    }
+	static char output_str[300] = {0};
+	static char buffer[16]      = {0};
+
+	strlcpy(output_str, _smallitoa((uint8_t)(EMS_Boiler.burnWorkMin / 1440), buffer), sizeof(output_str));
+	strlcat(output_str, " days ", sizeof(output_str));
+	strlcat(output_str, _smallitoa((uint8_t)((EMS_Boiler.burnWorkMin % 1440) / 60), buffer), sizeof(output_str));
+	strlcat(output_str, " hours ", sizeof(output_str));
+	strlcat(output_str, _smallitoa((uint8_t)(EMS_Boiler.burnWorkMin % 60), buffer), sizeof(output_str));
+	strlcat(output_str, " minutes", sizeof(output_str));
 
     JsonObject boiler = root.createNestedObject("boiler");
     if (ems_getBoilerEnabled()) {
@@ -2102,7 +2182,15 @@ void WebCallback(JsonObject root) {
 				boiler["b1"] = "off";
 			}
         //boiler["b1"] = (EMS_Boiler.tapwaterActive ? "running" : "off");
-        boiler["b2"] = (EMS_Boiler.heatingActive ? "running" : "idle");
+			if (EMS_Boiler.heatingActive) {
+				boiler["b2"] = "running";
+			} else if (EMS_Boiler.boilerBlocked) {
+				boiler["b2"] = "blocked";
+			} else if (EMS_Boiler.heatingActivated) {
+				boiler["b2"] = "idle";
+			} else {
+				boiler["b2"] = "off";
+			}
 
         if (EMS_Boiler.selBurnPow != EMS_VALUE_INT_NOTSET)
             boiler["b3"] = EMS_Boiler.selBurnPow;
@@ -2119,9 +2207,23 @@ void WebCallback(JsonObject root) {
         if (EMS_Boiler.selFlowTemp != EMS_VALUE_INT_NOTSET)
             boiler["b7"] = EMS_Boiler.selFlowTemp;
 
-        if (EMS_Boiler.retTemp < EMS_VALUE_USHORT_NOTSET)
+        if (EMS_Boiler.extTemp < EMS_VALUE_USHORT_NOTSET)
             boiler["b8"] = (float)EMS_Boiler.extTemp / 10;
 
+        boiler["b9"] = (EMS_Boiler.heatPmp ? "running" : "off");
+
+        boiler["b10"] = (EMS_Boiler.wWHeat ? "cv" : "ww");
+
+        //if (EMS_Boiler.burnStarts < EMS_VALUE_USHORT_NOTSET)
+        boiler["b11"] = EMS_Boiler.burnStarts;
+        if (EMS_Boiler.curBurnPow != EMS_VALUE_INT_NOTSET)
+            boiler["b12"] = EMS_Boiler.curBurnPow;
+        boiler["b13"] = output_str;
+/*         boiler["b13"] = PSTR("%d days %d hours %d minutes"),
+                  EMS_Boiler.burnWorkMin / 1440,
+                  (EMS_Boiler.burnWorkMin % 1440) / 60,
+                  EMS_Boiler.burnWorkMin % 60;
+ */
     } else {
         boiler["ok"] = false;
     }
@@ -2193,6 +2295,8 @@ void initEMSESP() {
     EMSESP_Settings.led               = true; // LED is on by default
     EMSESP_Settings.listen_mode       = false;
     EMSESP_Settings.publish_time      = DEFAULT_PUBLISHTIME;
+    EMSESP_Settings.restart_delay     = DEFAULT_RESTART_DELAY;
+    EMSESP_Settings.runtime_offset    = 0;
     EMSESP_Settings.dallas_sensors    = 0;
     EMSESP_Settings.led_gpio          = EMSESP_LED_GPIO;
     EMSESP_Settings.dallas_gpio       = EMSESP_DALLAS_GPIO;
@@ -2335,6 +2439,8 @@ void setup() {
     myESP.setOTA(OTACallback_pre, OTACallback_post);             // OTA callback which is called when OTA is starting and stopping
     myESP.begin(APP_HOSTNAME, APP_NAME, APP_VERSION, APP_URL, APP_URL_API);
 
+	irt_init();
+
     // at this point we have all the settings from our internall SPIFFS config file
     // fire up the UART now
     if (myESP.getUseSerial()) {
@@ -2367,6 +2473,11 @@ void setup() {
         publishValuesTimer.attach(DEFAULT_SENSOR_PUBLISHTIME, publishSensorValues);
     }
 
+ /*    // set timers for restart delay
+    if (EMSESP_Settings.restart_delay > 0) {
+        restartDelayTimer.attach(EMSESP_Settings.restart_delay, do_publishValues); // regular reads from the EMS
+    }
+ */
     // set pin for LED
     if (EMSESP_Settings.led_gpio != EMS_VALUE_INT_NOTSET) {
         pinMode(EMSESP_Settings.led_gpio, OUTPUT);
