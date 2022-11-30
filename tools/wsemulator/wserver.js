@@ -102,7 +102,14 @@ var custom_configfile = {
         "shower_timer": true,
         "shower_alert": false,
         "publish_time": 120,
-        "tx_mode": 1
+        "tx_mode": 4,
+        "restart_delay": 600,
+        "max_flowtemp": 60,
+        "flowtemp_p": 50,
+        "flowtemp_i": 3,
+        "flowtemp_d": 0,
+        "runtime_offset": 0,
+        "pid_ref": 1
     }
 };
 

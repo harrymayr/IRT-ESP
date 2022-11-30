@@ -178,6 +178,19 @@
         <br>
     </div>
 
+    <div class="row form-group">
+        <label class="col-xs-3">PID reference<i style="margin-left: 10px;"
+                class="glyphicon glyphicon-exclamation-sign text-danger" aria-hidden="true" data-toggle="popover"
+                data-trigger="hover" data-placement="right"
+                data-content="Reference variable for the PID controller"></i></label>
+        <span class="col-xs-9 col-md-5">
+            <select class="form-control input-sm" id="pid_ref">
+                <option selected="selected" value="1">1 (flow temperature)</option>
+                <option value="2">2 (return temperature)</option>
+            </select>
+        </span>
+    </div>
+
     <br>
     <div class="row form-group">
         <div class="col-xs-9 col-md-8">
@@ -259,7 +272,7 @@
                     </tr>
                     <tr>
                         <th>Burner runtime:</th>
-                        <td id="b13"></td>
+                        <td  colspan="3" id="b13"></td>
                     </tr>
                 </table>
             </div>

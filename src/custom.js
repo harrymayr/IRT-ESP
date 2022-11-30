@@ -15,7 +15,8 @@ var custom_config = {
         "flowtemp_p": 50,
         "flowtemp_i": 10,
         "flowtemp_d": 0,
-        "runtime_offset": 0
+        "runtime_offset": 0,
+        "pid_ref": 1
        }
     };
 
@@ -50,6 +51,7 @@ function listcustom() {
         $("input[name=\"shower_alert\"][value=\"1\"]").prop("checked", true);
     }
     document.getElementById("runtime_offset").value = custom_config.settings.runtime_offset;
+    document.getElementById("pid_ref").value = custom_config.settings.pid_ref;
 }
 
 function savecustom() {
@@ -88,6 +90,7 @@ function savecustom() {
     custom_config.settings.flowtemp_d = parseInt(document.getElementById("flowtemp_d").value);
     custom_config.settings.tx_mode = parseInt(document.getElementById("tx_mode").value);
     custom_config.settings.runtime_offset = parseInt(document.getElementById("runtime_offset").value);
+    custom_config.settings.pid_ref = parseInt(document.getElementById("pid_ref").value);
 
     custom_saveconfig();
 }

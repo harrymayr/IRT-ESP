@@ -141,6 +141,7 @@ void irt_doFlowTempTicker();
 #define IRT_FLOWTEMP_PID_P_DEFAULT 50
 #define IRT_FLOWTEMP_PID_I_DEFAULT 10
 #define IRT_FLOWTEMP_PID_D_DEFAULT 0
+#define EMS_PIDREF_DEFAULT 1 // Default PID reference: flow temperature)
 
 #define IRT_MAX_FLOWTEMP_DEFAULT 60
 
@@ -325,6 +326,7 @@ typedef struct {
 	uint16_t	flowtemp_D;		// D value of PID for flow temp control
     uint16_t  restart_delay;    // time untill the next burner start. Will by used by PID
     uint32_t  runtime_offset;   // offset of the runtime 
+	uint8_t	  pid_ref;		    // reference for the PID for flow temp control
 
 	uint8_t	max_flowtemp;		// safety value, system will always limit to this max temp
 

@@ -94,6 +94,7 @@ static const command_t project_cmds[] PROGMEM = {
 //    {true, "master_thermostat [product id]", "set default thermostat to use. No argument lists options"},
     {true, "flowtemp_pid [p] [i] [d]", "Set PID values for flow temperature controller (0.0-9.9)"},
     {true, "max_flowtemp [temp]", "Set max. flow temperature (10-90)"},
+    {true, "pid_ref <n>", "changes reference variable for PID regulator. 1=flow temperature, 2=return temperature"},
 
     {false, "info", "show current values deciphered from the EMS messages"},
     {false, "log <n | b | t | s | r | j | v | w [ID] | d [ID]>", "logging: none, basic, thermo, solar, raw, jabber, verbose, watch a type or device"},
@@ -1137,6 +1138,7 @@ bool LoadSaveCallback(MYESP_FSACTION_t action, JsonObject settings) {
 		EMSESP_Settings.flowtemp_P = settings["flowtemp_p"] | IRT_FLOWTEMP_PID_P_DEFAULT;
 		EMSESP_Settings.flowtemp_I = settings["flowtemp_i"] | IRT_FLOWTEMP_PID_I_DEFAULT;
 		EMSESP_Settings.flowtemp_D = settings["flowtemp_d"] | IRT_FLOWTEMP_PID_D_DEFAULT;
+        EMSESP_Settings.pid_ref = settings["pid_ref"] | EMS_PIDREF_DEFAULT; // default to 1 (flow temp)
 		EMSESP_Settings.max_flowtemp = settings["max_flowtemp"] | IRT_MAX_FLOWTEMP_DEFAULT;
 
 
@@ -1161,7 +1163,8 @@ bool LoadSaveCallback(MYESP_FSACTION_t action, JsonObject settings) {
 		settings["flowtemp_p"]		  = EMSESP_Settings.flowtemp_P;
 		settings["flowtemp_i"]		  = EMSESP_Settings.flowtemp_I;
 		settings["flowtemp_d"]		  = EMSESP_Settings.flowtemp_D;
-		settings["max_flowtemp"]	  = EMSESP_Settings.max_flowtemp;
+	    settings["pid_ref"]           = EMSESP_Settings.pid_ref;
+    	settings["max_flowtemp"]	  = EMSESP_Settings.max_flowtemp;
 
         return true;
     }
@@ -1362,6 +1365,16 @@ MYESP_FSACTION_t SetListCallback(MYESP_FSACTION_t action, char **argv, size_t ar
 			irt_setFlowPID(flow_p, flow_i, flow_d);
 			ok = MYESP_FSACTION_OK;
 		}
+       // pid_ref
+        if ((strcmp(setting, "pid_ref") == 0) && (wc == 2)) {
+            uint8_t mode = atoi(value);
+            if ((mode >= 1) && (mode <= 2)) { // see ems.h for definitions
+                EMSESP_Settings.pid_ref = mode;
+                ok = MYESP_FSACTION_RESTART;
+            } else {
+                myDebug_P(PSTR("Error. Usage: set pid_ref <1 | 2 >"));
+            }
+        }
 		if ((strcmp(argv[0], "max_flowtemp") == 0) && (argc >= 1)) {
 			int8_t flowtemp = -1;
 			if (argc > 1) flowtemp = atoi(argv[1]);
@@ -1399,6 +1412,7 @@ MYESP_FSACTION_t SetListCallback(MYESP_FSACTION_t action, char **argv, size_t ar
         }
 		char text_buf[30];
 		myDebug_P(PSTR("  flowtemp_pid=%s"), irt_format_flowtemp_pid_text(text_buf, sizeof(text_buf)));
+        myDebug_P(PSTR("  pid_ref=%d"), EMSESP_Settings.pid_ref);
 		myDebug_P(PSTR("  max_flowtemp=%d C"), EMSESP_Settings.max_flowtemp);
     }
 
@@ -2308,6 +2322,7 @@ void initEMSESP() {
 	EMSESP_Settings.flowtemp_P			= IRT_FLOWTEMP_PID_P_DEFAULT;
 	EMSESP_Settings.flowtemp_I			= IRT_FLOWTEMP_PID_I_DEFAULT;
 	EMSESP_Settings.flowtemp_D			= IRT_FLOWTEMP_PID_D_DEFAULT;
+    EMSESP_Settings.pid_ref             = EMS_PIDREF_DEFAULT; // default tx mode
 	EMSESP_Settings.max_flowtemp		= IRT_MAX_FLOWTEMP_DEFAULT;
 /*
     // shower settings

@@ -471,17 +471,20 @@ uint8_t irt_handle_0x8A(_IRT_RxTelegram *msg, uint8_t *data, uint8_t length)
 	 * tt 0x67 - 6.93kOhm resistor
 	 */
 
-	int16_t temp;
-	if (data[4] < 0xF8) {
-		temp = 0;
-		if (data[4] <= 0x80) {
+	int32_t temp;
+  	if (data[4] < 0xF8) {
+		// used a fit on data -> y = -0.3639x + 71.798 (see wiki)
+		// this function fits also better to the external temp. which will be delivered from the EasyControl adapter
+  		temp = (197450-data[4]*1000)/275;
+/*		temp = 0;
+ 		if (data[4] <= 0x80) {
 			temp = (0x80 - data[4]);
 			temp = ((temp * 100) / 26) + 250;
 		} else {
 			temp = data[4] - 0x80;
 			temp = 250 - ((temp * 100) / 26);
 		}
-		EMS_Boiler.extTemp = temp;
+ */		EMS_Boiler.extTemp = (int16_t)temp;
 	}
 	return 0;
 }
@@ -1323,19 +1326,20 @@ void irt_doFlowTempTicker()
 		return;
 	}
 
+	if (EMSESP_Settings.pid_ref==1)
 	// make sure the current reported flow temp is valid
-	if ((now_millis - IRT_Sys_Status.last_flow_update) >= IRT_BOILER_POLL_TIMEOUT) {
-	    myDebug_P(PSTR("Resetting boiler flow temp. because of boiler read timeout (%d) for flow temp."),(now_millis - IRT_Sys_Status.last_flow_update));
-		IRT_Sys_Status.cur_set_burner_power = 0;
-		return;
-	}
-
+		if ((now_millis - IRT_Sys_Status.last_flow_update) >= IRT_BOILER_POLL_TIMEOUT) {
+			myDebug_P(PSTR("Resetting boiler flow temp. because of boiler read timeout (%d) for flow temp."),(now_millis - IRT_Sys_Status.last_flow_update));
+			IRT_Sys_Status.cur_set_burner_power = 0;
+			return;
+		}
+    else
     // make sure the current reported ret temp is valid
-	if ((now_millis - IRT_Sys_Status.last_ret_update) >= IRT_BOILER_POLL_TIMEOUT) {
-	    myDebug_P(PSTR("Resetting boiler flow temp. because of boiler read timeout (%d) for return temp."),(now_millis - IRT_Sys_Status.last_ret_update));
-		IRT_Sys_Status.cur_set_burner_power = 0;
-		return;
-	}
+		if ((now_millis - IRT_Sys_Status.last_ret_update) >= IRT_BOILER_POLL_TIMEOUT) {
+			myDebug_P(PSTR("Resetting boiler flow temp. because of boiler read timeout (%d) for return temp."),(now_millis - IRT_Sys_Status.last_ret_update));
+			IRT_Sys_Status.cur_set_burner_power = 0;
+			return;
+		}
 	int16_t err, new_power;
 
 
@@ -1343,8 +1347,10 @@ void irt_doFlowTempTicker()
 // +1 to avoid immediately shut off of the burner while keeping the pump running.
     new_power = IRT_MIN_USABLE_BURN_POWER + 1;
 
-//	err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_flowtemp, &IRT_Sys_Status.flowPidData);
-	err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_rettemp, &IRT_Sys_Status.flowPidData);
+	if (EMSESP_Settings.pid_ref==1)
+		err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_flowtemp, &IRT_Sys_Status.flowPidData);
+	else
+		err = pid_Controller(IRT_Sys_Status.req_water_temp, IRT_Sys_Status.cur_rettemp, &IRT_Sys_Status.flowPidData);
 
 	if (IRT_Sys_Status.cur_set_burner_power == 0) {
 		// Pick a starting point based on requested temp and cur. floww temp
